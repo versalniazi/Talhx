@@ -10,7 +10,9 @@ import type { Order } from "./types";
  * filesystem is read-only, e.g. on serverless hosts). It is suitable for development and
  * low-volume single-server deployments only.
  *
- * To connect a real database (Postgres, MySQL, MongoDB, Supabase, etc.), implement the
+ * When Upstash Redis credentials are set (see UpstashStore below), that is used instead.
+ *
+ * To connect a different database (Postgres, MySQL, MongoDB, Supabase, etc.), implement the
  * `DataStore` interface below and return your implementation from `getStore()`.
  * Nothing else in the application needs to change.
  */
@@ -134,12 +136,79 @@ class JsonFileStore implements DataStore {
   }
 }
 
+/**
+ * Upstash Redis store (REST API, no extra dependencies). Used automatically when
+ * Upstash credentials are present — e.g. after adding "Upstash for Redis" from the
+ * Vercel Marketplace, which sets KV_REST_API_URL / KV_REST_API_TOKEN.
+ * Required on serverless hosts such as Vercel, where the filesystem is not persistent.
+ */
+class UpstashStore implements DataStore {
+  constructor(
+    private readonly url: string,
+    private readonly token: string,
+  ) {}
+
+  private async cmd<T = unknown>(...args: (string | number)[]): Promise<T> {
+    const res = await fetch(this.url, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${this.token}`, "Content-Type": "application/json" },
+      body: JSON.stringify(args),
+      cache: "no-store",
+    });
+    const data = (await res.json()) as { result?: T; error?: string };
+    if (!res.ok || data.error) throw new Error(`[data-store] Upstash error: ${data.error ?? res.status}`);
+    return data.result as T;
+  }
+
+  async createOrder(order: Order) {
+    await this.cmd("SET", `order:${order.orderId}`, JSON.stringify(order));
+    await this.cmd("SET", `ref:${order.paymentReference}`, order.orderId);
+    await this.cmd("LPUSH", "orders", order.orderId);
+  }
+
+  async getOrder(orderId: string) {
+    const raw = await this.cmd<string | null>("GET", `order:${orderId}`);
+    return raw ? (JSON.parse(raw) as Order) : undefined;
+  }
+
+  async updateOrder(orderId: string, patch: Partial<Order>) {
+    const existing = await this.getOrder(orderId);
+    if (!existing) return undefined;
+    const updated = { ...existing, ...patch, orderId, updatedAt: new Date().toISOString() };
+    await this.cmd("SET", `order:${orderId}`, JSON.stringify(updated));
+    return updated;
+  }
+
+  async paymentReferenceExists(reference: string) {
+    return (await this.cmd<number>("EXISTS", `ref:${reference}`)) === 1;
+  }
+
+  async saveEnquiry(enquiry: Enquiry) {
+    await this.cmd("LPUSH", "enquiries", JSON.stringify(enquiry));
+  }
+
+  async saveSubscriber(subscriber: Subscriber) {
+    const added = await this.cmd<number>("SADD", "subscribers", subscriber.email);
+    if (added === 1) await this.cmd("HSET", "subscriber_dates", subscriber.email, subscriber.createdAt);
+    return added === 1;
+  }
+}
+
 const globalForStore = globalThis as unknown as { __talhxStore?: DataStore };
 
 export function getStore(): DataStore {
   if (!globalForStore.__talhxStore) {
-    const dir = path.resolve(process.cwd(), process.env.DATA_DIR || ".data");
-    globalForStore.__talhxStore = new JsonFileStore(path.join(dir, "store.json"));
+    const url = process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL;
+    const token = process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN;
+    if (url && token) {
+      globalForStore.__talhxStore = new UpstashStore(url, token);
+    } else {
+      if (process.env.VERCEL) {
+        console.warn("[data-store] No Upstash Redis configured on Vercel: orders will NOT persist. See README › Deploying to Vercel.");
+      }
+      const dir = path.resolve(process.cwd(), process.env.DATA_DIR || ".data");
+      globalForStore.__talhxStore = new JsonFileStore(path.join(dir, "store.json"));
+    }
   }
   return globalForStore.__talhxStore;
 }

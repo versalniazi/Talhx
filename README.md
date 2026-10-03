@@ -50,6 +50,15 @@ The order model (statuses: Pending, Confirmation Submitted, Verified, Rejected, 
 
 Set `NOTIFICATION_WEBHOOK_URL` (server-only) to receive a POST for each new order, payment confirmation and enquiry, for example via Slack, Zapier or Make.
 
+## Deploying to Vercel
+
+1. In Vercel, choose **Add New → Project**, import the GitHub repository and keep the detected **Next.js** settings.
+2. Under **Storage → Marketplace**, add **Upstash for Redis** (the free plan is enough) and connect it to the project. This sets `KV_REST_API_URL` and `KV_REST_API_TOKEN`, so orders, payment confirmations, enquiries and newsletter signups persist. **Without it, orders are lost on Vercel.**
+3. Under **Settings → Environment Variables**, set `NEXT_PUBLIC_SITE_URL` (e.g. `https://your-project.vercel.app`, or your own domain later) and, optionally, `NOTIFICATION_WEBHOOK_URL`.
+4. Redeploy. To view orders, open the Upstash console's Data Browser and look at the `order:*` keys and the `orders` / `enquiries` lists.
+
+On Vercel, payment screenshot uploads keep only their metadata (file name, type and size). To store the files themselves, connect object storage such as Vercel Blob.
+
 ## Security
 
 - Server-side validation and sanitisation on every endpoint, sharing its rules with the client-side validation
