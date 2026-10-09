@@ -53,7 +53,7 @@ Set `NOTIFICATION_WEBHOOK_URL` (server-only) to receive a POST for each new orde
 ## Deploying to Vercel
 
 1. In Vercel, choose **Add New → Project**, import the GitHub repository and keep the detected **Next.js** settings.
-2. Under **Storage → Marketplace**, add **Upstash for Redis** (the free plan is enough) and connect it to the project. This sets `KV_REST_API_URL` and `KV_REST_API_TOKEN`, so orders, payment confirmations, enquiries and newsletter signups persist. **Without it, orders are lost on Vercel.**
+2. Under **Storage**, create or connect a Redis database (Upstash for Redis, or Vercel's Redis) to this project, for all environments. The site detects it automatically from `KV_REST_API_URL`/`KV_REST_API_TOKEN`, `UPSTASH_REDIS_REST_URL`/`_TOKEN`, `REDIS_URL` or `KV_URL`, including any custom prefix Vercel adds (e.g. `STORAGE_KV_REST_API_URL`). Orders, payment confirmations, enquiries, newsletter signups and live chats are stored there. **Without it, orders are lost and live chat is disabled.** To check, open `/admin/login`: it shows whether a database is connected.
 3. Under **Settings → Environment Variables**, set `NEXT_PUBLIC_SITE_URL` (e.g. `https://your-project.vercel.app`, or your own domain later) and, optionally, `NOTIFICATION_WEBHOOK_URL`.
 4. Redeploy. To view orders, open the Upstash console's Data Browser and look at the `order:*` keys and the `orders` / `enquiries` lists.
 

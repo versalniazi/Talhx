@@ -2,6 +2,7 @@ import "server-only";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import type { Order } from "./types";
+import { redis, redisConfigured } from "@/lib/upstash";
 
 /**
  * Data access layer.
@@ -143,21 +144,8 @@ class JsonFileStore implements DataStore {
  * Required on serverless hosts such as Vercel, where the filesystem is not persistent.
  */
 class UpstashStore implements DataStore {
-  constructor(
-    private readonly url: string,
-    private readonly token: string,
-  ) {}
-
-  private async cmd<T = unknown>(...args: (string | number)[]): Promise<T> {
-    const res = await fetch(this.url, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${this.token}`, "Content-Type": "application/json" },
-      body: JSON.stringify(args),
-      cache: "no-store",
-    });
-    const data = (await res.json()) as { result?: T; error?: string };
-    if (!res.ok || data.error) throw new Error(`[data-store] Upstash error: ${data.error ?? res.status}`);
-    return data.result as T;
+  private cmd<T = unknown>(...args: (string | number)[]): Promise<T> {
+    return redis<T>(...args);
   }
 
   async createOrder(order: Order) {
@@ -198,13 +186,11 @@ const globalForStore = globalThis as unknown as { __talhxStore?: DataStore };
 
 export function getStore(): DataStore {
   if (!globalForStore.__talhxStore) {
-    const url = process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL;
-    const token = process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN;
-    if (url && token) {
-      globalForStore.__talhxStore = new UpstashStore(url, token);
+    if (redisConfigured()) {
+      globalForStore.__talhxStore = new UpstashStore();
     } else {
       if (process.env.VERCEL) {
-        console.warn("[data-store] No Upstash Redis configured on Vercel: orders will NOT persist. See README › Deploying to Vercel.");
+        console.warn("[data-store] No Redis configured on Vercel: orders will NOT persist. See README › Deploying to Vercel.");
       }
       const dir = path.resolve(process.cwd(), process.env.DATA_DIR || ".data");
       globalForStore.__talhxStore = new JsonFileStore(path.join(dir, "store.json"));

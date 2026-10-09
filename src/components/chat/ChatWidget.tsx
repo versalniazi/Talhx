@@ -52,6 +52,7 @@ export function ChatWidget() {
   const [unread, setUnread] = useState(0);
   const [contact, setContact] = useState({ name: "", email: "" });
   const [contactErrors, setContactErrors] = useState<{ name?: string; email?: string }>({});
+  const [unavailable, setUnavailable] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
@@ -103,6 +104,10 @@ export function ChatWidget() {
       if (document.hidden) return;
       try {
         const r = await fetch(`/api/chat/${session.id}?after=${encodeURIComponent(lastAt.current)}`, { headers: { "x-chat-token": session.token } });
+        if (r.status === 404) {
+          forgetSession();
+          return;
+        }
         if (!r.ok || stopped) return;
         const d = (await r.json()) as { messages: ChatMessage[]; status: ConversationStatus; needsContact: boolean };
         setStatus(d.status);
@@ -146,10 +151,24 @@ export function ChatWidget() {
     return () => window.removeEventListener("keydown", onKey);
   }, [open]);
 
-  async function ensureSession(): Promise<Session> {
-    if (session) return session;
+  class Gone extends Error {}
+
+  function forgetSession() {
+    try {
+      localStorage.removeItem(STORAGE_KEY);
+    } catch {
+      /* ignore */
+    }
+    setSession(null);
+  }
+
+  async function ensureSession(fresh = false): Promise<Session> {
+    if (session && !fresh) return session;
     const r = await fetch("/api/chat/start", { method: "POST", headers: headers(null), body: JSON.stringify({ page: pathname }) });
-    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).message || "Couldn't start the chat.");
+    if (!r.ok) {
+      if (r.status === 503) setUnavailable(true);
+      throw new Error((await r.json().catch(() => ({}))).message || "Couldn't start the chat.");
+    }
     const d = (await r.json()) as { conversationId: string; token: string; messages: ChatMessage[]; status: ConversationStatus };
     const s = { id: d.conversationId, token: d.token };
     try {
@@ -158,9 +177,30 @@ export function ChatWidget() {
       /* ignore */
     }
     setSession(s);
-    setMessages(d.messages);
+    if (!fresh) setMessages(d.messages);
     lastAt.current = d.messages.at(-1)?.createdAt ?? "";
     return s;
+  }
+
+  /**
+   * Run a request against the current conversation. If the server no longer knows it
+   * (expired or lost), start a new conversation — handing over to the team again if the
+   * visitor had already asked for a person — and retry once.
+   */
+  async function withSession<T>(fn: (s: Session) => Promise<T>): Promise<T> {
+    const s = await ensureSession();
+    try {
+      return await fn(s);
+    } catch (e) {
+      if (!(e instanceof Gone)) throw e;
+      forgetSession();
+      const fresh = await ensureSession(true);
+      if (status !== "bot") {
+        await fetch(`/api/chat/${fresh.id}/human`, { method: "POST", headers: headers(fresh) });
+        setStatus("waiting");
+      }
+      return fn(fresh);
+    }
   }
 
   async function send(text: string) {
@@ -172,12 +212,15 @@ export function ChatWidget() {
     const optimistic: ChatMessage = { id: `local-${Date.now()}`, conversationId: "", from: "visitor", text: t, createdAt: "" };
     setMessages((m) => [...m, optimistic]);
     try {
-      const s = await ensureSession();
-      const r = await fetch(`/api/chat/${s.id}/messages`, { method: "POST", headers: headers(s), body: JSON.stringify({ text: t }) });
-      const d = (await r.json().catch(() => ({}))) as { messages?: ChatMessage[]; status?: ConversationStatus; needsContact?: boolean; message?: string };
-      if (!r.ok || !d.messages) throw new Error(d.message || "Message not sent. Please try again.");
+      const d = await withSession(async (s) => {
+        const r = await fetch(`/api/chat/${s.id}/messages`, { method: "POST", headers: headers(s), body: JSON.stringify({ text: t }) });
+        if (r.status === 404) throw new Gone();
+        const body = (await r.json().catch(() => ({}))) as { messages?: ChatMessage[]; status?: ConversationStatus; needsContact?: boolean; message?: string };
+        if (!r.ok || !body.messages) throw new Error(body.message || "Message not sent. Please try again.");
+        return body;
+      });
       setMessages((m) => m.filter((x) => x.id !== optimistic.id));
-      merge(d.messages);
+      merge(d.messages!);
       if (d.status) setStatus(d.status);
       setNeedsContact(Boolean(d.needsContact));
     } catch (e) {
@@ -193,18 +236,25 @@ export function ChatWidget() {
     e.preventDefault();
     const errs = { name: v.name(contact.name), email: v.email(contact.email) };
     setContactErrors(errs);
-    if (errs.name || errs.email || !session) return;
+    if (errs.name || errs.email) return;
     setSending(true);
+    setError("");
     try {
-      const r = await fetch(`/api/chat/${session.id}/contact`, { method: "POST", headers: headers(), body: JSON.stringify(contact) });
-      const d = (await r.json().catch(() => ({}))) as { messages?: ChatMessage[]; fieldErrors?: typeof contactErrors; message?: string };
-      if (!r.ok || !d.messages) {
+      const d = await withSession(async (s) => {
+        const r = await fetch(`/api/chat/${s.id}/contact`, { method: "POST", headers: headers(s), body: JSON.stringify(contact) });
+        if (r.status === 404) throw new Gone();
+        return { ok: r.ok, ...((await r.json().catch(() => ({}))) as { messages?: ChatMessage[]; fieldErrors?: typeof contactErrors; message?: string }) };
+      });
+      if (!d.ok || !d.messages) {
         if (d.fieldErrors) setContactErrors(d.fieldErrors);
         else setError(d.message || "Couldn't save your details.");
         return;
       }
       merge(d.messages);
       setNeedsContact(false);
+      setStatus((st) => (st === "bot" ? "waiting" : st));
+    } catch (e) {
+      setError((e as Error).message || "Couldn't save your details. Please try again.");
     } finally {
       setSending(false);
     }
@@ -316,6 +366,15 @@ export function ChatWidget() {
                   </button>
                 ))}
               </div>
+            )}
+            {unavailable && (
+              <p className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+                Live chat is temporarily unavailable. Please{" "}
+                <Link href="/contact" className="font-medium underline" onClick={() => setOpen(false)}>
+                  send us a message
+                </Link>{" "}
+                and we&apos;ll reply by email.
+              </p>
             )}
             {sending && (
               <p className="flex items-center gap-2 text-xs text-ink-500">

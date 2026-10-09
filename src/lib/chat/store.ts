@@ -1,7 +1,7 @@
 import "server-only";
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { redis, upstashConfig } from "@/lib/upstash";
+import { redis, redisConfigured } from "@/lib/upstash";
 import { CHAT_MAX_MESSAGES, type ChatMessage, type Conversation } from "./types";
 
 /**
@@ -116,7 +116,7 @@ const g = globalThis as unknown as { __talhxChat?: ChatStore };
 
 export function getChatStore(): ChatStore {
   if (!g.__talhxChat) {
-    g.__talhxChat = upstashConfig()
+    g.__talhxChat = redisConfigured()
       ? new RedisChatStore()
       : new FileChatStore(path.resolve(process.cwd(), process.env.DATA_DIR || ".data", "chat.json"));
   }
