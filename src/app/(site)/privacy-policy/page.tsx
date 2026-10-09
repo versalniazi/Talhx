@@ -42,6 +42,10 @@ export default function PrivacyPolicyPage() {
           <strong>Enquiries:</strong> your name, email, and optionally your phone number, company, website, service of interest, budget and message.
         </li>
         <li>
+          <strong>Live chat:</strong> the messages you send in our website chat, the page you started the chat on and, if you choose to give
+          them, your name and email address.
+        </li>
+        <li>
           <strong>Newsletter:</strong> your email address and your consent to receive emails.
         </li>
         <li>
@@ -66,6 +70,10 @@ export default function PrivacyPolicyPage() {
         </li>
         <li>
           <strong>To keep accounting and tax records</strong> — necessary to comply with our legal obligations.
+        </li>
+        <li>
+          <strong>To answer live chat questions</strong> — our legitimate interests in responding to people who contact us. Chat replies come either
+          from an automatic assistant, which answers from information published on this website, or from a member of our team.
         </li>
         <li>
           <strong>To send our newsletter</strong> — your consent, which you can withdraw at any time.
@@ -93,6 +101,7 @@ export default function PrivacyPolicyPage() {
         <li>Order and payment records are kept for six years after the end of the financial year they relate to, to meet UK tax and accounting requirements.</li>
         <li>Enquiries that do not lead to an order are kept for up to 12 months.</li>
         <li>Payment screenshots are deleted once your payment has been verified and any related query is resolved, unless needed as part of our accounting records.</li>
+        <li>Live chat conversations are kept for up to 12 months, unless they relate to an order, in which case they are kept with the order records.</li>
         <li>Newsletter data is kept until you unsubscribe.</li>
       </ul>
 

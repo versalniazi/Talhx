@@ -59,6 +59,24 @@ Set `NOTIFICATION_WEBHOOK_URL` (server-only) to receive a POST for each new orde
 
 On Vercel, payment screenshot uploads keep only their metadata (file name, type and size). To store the files themselves, connect object storage such as Vercel Blob.
 
+## Live chat & team inbox
+
+Each public page has a chat button in the bottom-right corner.
+
+- **Assistant:** a rule-based helper (`src/lib/chat/bot.ts`) answers common questions about services, prices, payment, delivery and refunds, using only the site's own data. It never invents answers. Anything it can't handle, or any request for a person, goes to the team.
+- **Team inbox:** teammates sign in at **`/admin`** to see conversations, reply in real time, and close or reopen chats. The "Needs team" tab lists visitors who are waiting, and the browser tab title shows how many need attention. Visitors see the teammate's name on each reply.
+- **Visitor details:** when a visitor asks for a person, they're asked for their name and email, so you can follow up by email if they leave.
+- **Notifications:** if `NOTIFICATION_WEBHOOK_URL` is set, a notification is sent when a visitor asks for a person and for each new visitor message in a team conversation.
+
+Setup (in Vercel → Settings → Environment Variables, then redeploy):
+
+| Variable | Example |
+| --- | --- |
+| `CHAT_AGENTS` | `Ali:a-long-password,Sara:another-long-password` |
+| `CHAT_SESSION_SECRET` | output of `openssl rand -hex 32` |
+
+To add or remove a teammate, edit `CHAT_AGENTS` and redeploy. Removing someone signs them out immediately. Chats are stored in the same Upstash Redis database as orders.
+
 ## Security
 
 - Server-side validation and sanitisation on every endpoint, sharing its rules with the client-side validation
