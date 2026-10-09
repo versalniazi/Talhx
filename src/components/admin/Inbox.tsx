@@ -1,10 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ArrowLeft, ArrowUp, CheckCircle2, ExternalLink, LogOut, Mail, MessageSquare, RotateCcw } from "lucide-react";
+import { ArrowLeft, ArrowUp, CheckCircle2, ExternalLink, LogOut, Mail, MessageSquare, Paperclip, RotateCcw, X } from "lucide-react";
+import { AttachmentView } from "@/components/chat/AttachmentView";
+import { prepareFile } from "@/components/chat/prepareFile";
 import { LogoMark } from "@/components/ui/Logo";
 import { STATUS_LABELS, type ChatMessage, type ConversationStatus, type PublicConversation } from "@/lib/chat/types";
-import { CHAT_MESSAGE_MAX } from "@/lib/chat/types";
+import { ATTACHMENT_ACCEPT, CHAT_MESSAGE_MAX, formatBytes } from "@/lib/chat/types";
 import { cn } from "@/lib/format";
 
 type Tab = "active" | "bot" | "closed" | "all";
@@ -42,6 +44,8 @@ export function Inbox({ agentName }: { agentName: string }) {
   const [selected, setSelected] = useState<string | null>(null);
   const [thread, setThread] = useState<{ conversation: PublicConversation; messages: ChatMessage[] } | null>(null);
   const [reply, setReply] = useState("");
+  const [file, setFile] = useState<File | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const listEnd = useRef<HTMLDivElement>(null);
@@ -95,17 +99,34 @@ export function Inbox({ agentName }: { agentName: string }) {
     document.title = `${waitingCount ? `(${waitingCount}) ` : ""}Team Inbox | TALHX`;
   }, [waitingCount]);
 
+  async function chooseFile(f: File | null) {
+    if (fileInputRef.current) fileInputRef.current.value = "";
+    if (!f) return;
+    setError("");
+    const prepared = await prepareFile(f);
+    if (typeof prepared === "string") setError(prepared);
+    else setFile(prepared);
+  }
+
   async function sendReply() {
     const text = reply.trim();
-    if (!text || !selected || busy) return;
+    if ((!text && !file) || !selected || busy) return;
     setBusy(true);
     setError("");
-    const r = handleAuth(
-      await fetch(`/api/admin/chats/${selected}/messages`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }) }),
-    );
+    let res: Response;
+    if (file) {
+      const form = new FormData();
+      form.append("file", file);
+      if (text) form.append("text", text);
+      res = await fetch(`/api/admin/chats/${selected}/files`, { method: "POST", body: form });
+    } else {
+      res = await fetch(`/api/admin/chats/${selected}/messages`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }) });
+    }
+    const r = handleAuth(res);
     const d = (await r.json().catch(() => ({}))) as { conversation?: PublicConversation; messages?: ChatMessage[]; message?: string };
     if (r.ok && d.conversation && d.messages) {
       setReply("");
+      setFile(null);
       setThread((t) => (t ? { conversation: d.conversation!, messages: [...t.messages, ...d.messages!] } : t));
       setConvs((cs) => cs.map((c) => (c.id === selected ? d.conversation! : c)));
     } else setError(d.message || "Reply not sent.");
@@ -261,12 +282,12 @@ export function Inbox({ agentName }: { agentName: string }) {
                 {thread!.messages.map((m) =>
                   m.from === "system" ? (
                     <p key={m.id} className="mx-auto max-w-md text-center text-xs text-ink-500">
-                      {m.text} · {fullTime(m.createdAt)}
+                      {m.text}
                     </p>
                   ) : (
                     <div key={m.id} className={cn("flex flex-col", m.from === "visitor" ? "items-start" : "items-end")}>
                       <p className="mb-1 px-1 text-[11px] text-ink-500">
-                        {m.from === "visitor" ? conv.name || "Visitor" : m.from === "agent" ? m.agentName : "Assistant (automatic)"} · {fullTime(m.createdAt)}
+                        {m.from === "visitor" ? conv.name || "Visitor" : m.from === "agent" ? m.agentName : "Assistant (automatic)"}
                       </p>
                       <div
                         className={cn(
@@ -276,6 +297,11 @@ export function Inbox({ agentName }: { agentName: string }) {
                           m.from === "bot" && "rounded-br-md bg-ink-900/[0.06] text-ink-700",
                         )}
                       >
+                        {m.attachment && (
+                          <span className={cn("block", m.text && "mb-2")}>
+                            <AttachmentView attachment={m.attachment} url={`/api/admin/chats/${conv.id}/files/${m.attachment.id}`} tone={m.from === "agent" ? "dark" : "light"} />
+                          </span>
+                        )}
                         {m.text}
                       </div>
                     </div>
@@ -299,7 +325,28 @@ export function Inbox({ agentName }: { agentName: string }) {
                 {conv.status === "bot" && (
                   <p className="mb-2 text-xs text-ink-500">This visitor is talking to the assistant. Replying will take over the conversation.</p>
                 )}
+                {file && (
+                  <div className="mb-2 flex items-center gap-2 rounded-xl border border-ink-900/10 bg-mist px-3 py-2 text-sm">
+                    <Paperclip className="h-4 w-4 shrink-0 text-volt-600" aria-hidden="true" />
+                    <span className="min-w-0 flex-1 truncate text-ink-800">{file.name}</span>
+                    <span className="shrink-0 text-xs text-ink-500">{formatBytes(file.size)}</span>
+                    <button type="button" onClick={() => setFile(null)} className="rounded-full p-1 text-ink-500 hover:bg-white hover:text-ink-900" aria-label={`Remove ${file.name}`}>
+                      <X className="h-4 w-4" aria-hidden="true" />
+                    </button>
+                  </div>
+                )}
                 <div className="flex items-end gap-2">
+                  <input ref={fileInputRef} type="file" accept={ATTACHMENT_ACCEPT} className="sr-only" tabIndex={-1} onChange={(e) => chooseFile(e.target.files?.[0] ?? null)} />
+                  <button
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={busy}
+                    className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full text-ink-500 hover:bg-mist hover:text-volt-600 disabled:opacity-40"
+                    aria-label="Attach an image or document"
+                    title="Attach an image or document (max 4 MB)"
+                  >
+                    <Paperclip className="h-5 w-5" aria-hidden="true" />
+                  </button>
                   <label htmlFor="reply" className="sr-only">
                     Reply
                   </label>
@@ -318,7 +365,7 @@ export function Inbox({ agentName }: { agentName: string }) {
                     placeholder={`Reply as ${agentName}… (Enter to send, Shift+Enter for a new line)`}
                     className="field-input min-h-[48px] flex-1 resize-y"
                   />
-                  <button type="submit" disabled={!reply.trim() || busy} className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-volt-500 text-white hover:bg-volt-600 disabled:opacity-40" aria-label="Send reply">
+                  <button type="submit" disabled={(!reply.trim() && !file) || busy} className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-volt-500 text-white hover:bg-volt-600 disabled:opacity-40" aria-label="Send reply">
                     <ArrowUp className="h-5 w-5" aria-hidden="true" />
                   </button>
                 </div>

@@ -65,6 +65,7 @@ Each public page has a chat button in the bottom-right corner.
 
 - **Assistant:** a rule-based helper (`src/lib/chat/bot.ts`) answers common questions about services, prices, payment, delivery and refunds, using only the site's own data. It never invents answers. Anything it can't handle, or any request for a person, goes to the team.
 - **Team inbox:** teammates sign in at **`/admin`** to see conversations, reply in real time, and close or reopen chats. The "Needs team" tab lists visitors who are waiting, and the browser tab title shows how many need attention. Visitors see the teammate's name on each reply.
+- **Attachments:** visitors and teammates can send images (PNG, JPG, WebP, GIF) and documents (PDF, Word, Excel, CSV, TXT) up to 4 MB. Large photos are shrunk automatically before upload. Files are checked to be what their name says, stored in the same Redis database, and only visible to that visitor and signed-in teammates. Sending a file to the assistant brings in the team.
 - **Visitor details:** when a visitor asks for a person, they're asked for their name and email, so you can follow up by email if they leave.
 - **Notifications:** if `NOTIFICATION_WEBHOOK_URL` is set, a notification is sent when a visitor asks for a person and for each new visitor message in a team conversation.
 

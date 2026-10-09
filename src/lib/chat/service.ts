@@ -2,7 +2,7 @@ import "server-only";
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { getChatStore } from "./store";
 import { GREETING, botReply, type BotReply } from "./bot";
-import type { ChatMessage, Conversation, Sender } from "./types";
+import type { ChatAttachment, ChatMessage, Conversation, Sender } from "./types";
 import { notify } from "@/lib/security";
 
 export const hashToken = (t: string) => createHash("sha256").update(t).digest("hex");
@@ -23,7 +23,8 @@ async function append(conv: Conversation, m: ChatMessage) {
   await store.addMessage(m);
   conv.lastMessageAt = m.createdAt;
   conv.updatedAt = m.createdAt;
-  conv.lastMessagePreview = `${m.from === "agent" ? `${m.agentName}: ` : m.from === "bot" ? "Assistant: " : ""}${m.text}`.slice(0, 140);
+  const body = m.attachment ? `📎 ${m.attachment.name}${m.text ? ` — ${m.text}` : ""}` : m.text;
+  conv.lastMessagePreview = `${m.from === "agent" ? `${m.agentName}: ` : m.from === "bot" ? "Assistant: " : ""}${body}`.slice(0, 140);
   conv.messageCount += 1;
   if (m.from === "visitor" && conv.status !== "bot") conv.unreadForAgent += 1;
   return m;
@@ -130,6 +131,33 @@ export async function setStatus(conv: Conversation, status: "open" | "closed", a
     message(conv.id, "system", status === "closed" ? `${agentName} closed this conversation.` : `${agentName} reopened this conversation.`),
   );
   if (status === "closed") conv.unreadForAgent = 0;
+  await getChatStore().saveConversation(conv);
+  return m;
+}
+
+/** Visitor sends a file. The assistant can't read files, so this always brings in the team. */
+export async function visitorAttachment(conv: Conversation, file: { meta: ChatAttachment; data: Buffer }, text: string) {
+  await getChatStore().saveFile(conv.id, file.meta, file.data);
+  if (conv.status === "closed") conv.status = "waiting";
+  const out: ChatMessage[] = [await append(conv, message(conv.id, "visitor", text, { attachment: file.meta }))];
+  let needsContact = !conv.email;
+  if (conv.status === "bot") {
+    const res = await requestHuman(conv, { skipSave: true });
+    out.push(...res.messages);
+    needsContact = res.needsContact;
+  } else {
+    await notify("New live chat attachment", { conversationId: conv.id, name: conv.name, file: file.meta.name });
+  }
+  await getChatStore().saveConversation(conv);
+  return { messages: out, needsContact };
+}
+
+export async function agentAttachment(conv: Conversation, agentName: string, file: { meta: ChatAttachment; data: Buffer }, text: string) {
+  await getChatStore().saveFile(conv.id, file.meta, file.data);
+  const m = await append(conv, message(conv.id, "agent", text, { agentName, attachment: file.meta }));
+  if (conv.status !== "closed") conv.status = "open";
+  conv.assignedTo ??= agentName;
+  conv.unreadForAgent = 0;
   await getChatStore().saveConversation(conv);
   return m;
 }

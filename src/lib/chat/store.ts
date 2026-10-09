@@ -2,7 +2,7 @@ import "server-only";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { redis, redisConfigured } from "@/lib/upstash";
-import { CHAT_MAX_MESSAGES, type ChatMessage, type Conversation } from "./types";
+import { CHAT_MAX_MESSAGES, type ChatAttachment, type ChatMessage, type Conversation } from "./types";
 
 /**
  * Chat persistence. Uses Upstash Redis when configured (required on Vercel),
@@ -15,9 +15,32 @@ export interface ChatStore {
   listConversations(limit?: number): Promise<Conversation[]>;
   addMessage(m: ChatMessage): Promise<void>;
   getMessages(conversationId: string): Promise<ChatMessage[]>;
+  saveFile(conversationId: string, meta: ChatAttachment, data: Buffer): Promise<void>;
+  getFile(conversationId: string, fileId: string): Promise<{ meta: ChatAttachment; data: Buffer } | undefined>;
 }
 
+/** Files are stored in Redis as base64 chunks so each request stays well under provider size limits. */
+const CHUNK = 512 * 1024;
+
 class RedisChatStore implements ChatStore {
+  async saveFile(conversationId: string, meta: ChatAttachment, data: Buffer) {
+    const b64 = data.toString("base64");
+    const chunks = Math.ceil(b64.length / CHUNK) || 1;
+    for (let i = 0; i < chunks; i++) await redis("SET", `chat:file:${meta.id}:${i}`, b64.slice(i * CHUNK, (i + 1) * CHUNK));
+    await redis("SET", `chat:file:${meta.id}`, JSON.stringify({ ...meta, conversationId, chunks }));
+  }
+  async getFile(conversationId: string, fileId: string) {
+    const raw = await redis<string | null>("GET", `chat:file:${fileId}`);
+    if (!raw) return undefined;
+    const rec = JSON.parse(raw) as ChatAttachment & { conversationId: string; chunks: number };
+    if (rec.conversationId !== conversationId) return undefined;
+    const keys = Array.from({ length: rec.chunks }, (_, i) => `chat:file:${fileId}:${i}`);
+    const parts = (await redis<(string | null)[] | null>("MGET", ...keys)) ?? [];
+    if (parts.some((p) => p == null)) return undefined;
+    const { conversationId: _c, chunks: _n, ...meta } = rec;
+    return { meta, data: Buffer.from(parts.join(""), "base64") };
+  }
+
   async createConversation(c: Conversation) {
     await this.saveConversation(c);
   }
@@ -109,6 +132,26 @@ class FileChatStore implements ChatStore {
   }
   async getMessages(conversationId: string) {
     return [...((await this.load()).messages[conversationId] ?? [])];
+  }
+  private fileDir() {
+    return path.join(path.dirname(this.file), "chat-files");
+  }
+  async saveFile(conversationId: string, meta: ChatAttachment, data: Buffer) {
+    const dir = this.fileDir();
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(path.join(dir, meta.id), data, { mode: 0o600 });
+    await fs.writeFile(path.join(dir, `${meta.id}.json`), JSON.stringify({ ...meta, conversationId }), { mode: 0o600 });
+  }
+  async getFile(conversationId: string, fileId: string) {
+    if (!/^[0-9a-f-]{36}$/.test(fileId)) return undefined;
+    try {
+      const rec = JSON.parse(await fs.readFile(path.join(this.fileDir(), `${fileId}.json`), "utf8")) as ChatAttachment & { conversationId: string };
+      if (rec.conversationId !== conversationId) return undefined;
+      const { conversationId: _c, ...meta } = rec;
+      return { meta, data: await fs.readFile(path.join(this.fileDir(), fileId)) };
+    } catch {
+      return undefined;
+    }
   }
 }
 

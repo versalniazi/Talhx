@@ -42,7 +42,7 @@ export default function PrivacyPolicyPage() {
           <strong>Enquiries:</strong> your name, email, and optionally your phone number, company, website, service of interest, budget and message.
         </li>
         <li>
-          <strong>Live chat:</strong> the messages you send in our website chat, the page you started the chat on and, if you choose to give
+          <strong>Live chat:</strong> the messages and any files (such as images or documents) you send in our website chat, the page you started the chat on and, if you choose to give
           them, your name and email address.
         </li>
         <li>

@@ -3,10 +3,12 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ArrowUp, Bot, Loader2, MessageCircle, UserRound, X } from "lucide-react";
+import { ArrowUp, Bot, Loader2, MessageCircle, Paperclip, UserRound, X } from "lucide-react";
+import { AttachmentView } from "./AttachmentView";
+import { prepareFile } from "./prepareFile";
 import { GREETING, HUMAN_REQUEST } from "@/lib/chat/bot";
 import type { ChatMessage, ConversationStatus } from "@/lib/chat/types";
-import { CHAT_MESSAGE_MAX } from "@/lib/chat/types";
+import { ATTACHMENT_ACCEPT, CHAT_MESSAGE_MAX, formatBytes } from "@/lib/chat/types";
 import { cn } from "@/lib/format";
 import { v } from "@/lib/validation";
 
@@ -36,9 +38,6 @@ function readSession(): Session | null {
   }
 }
 
-const time = (iso: string) =>
-  iso ? new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit" }).format(new Date(iso)) : "";
-
 export function ChatWidget() {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
@@ -47,6 +46,8 @@ export function ChatWidget() {
   const [status, setStatus] = useState<ConversationStatus>("bot");
   const [needsContact, setNeedsContact] = useState(false);
   const [input, setInput] = useState("");
+  const [file, setFile] = useState<File | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState("");
   const [unread, setUnread] = useState(0);
@@ -203,17 +204,36 @@ export function ChatWidget() {
     }
   }
 
+  async function chooseFile(f: File | null) {
+    if (fileInputRef.current) fileInputRef.current.value = "";
+    if (!f) return;
+    setError("");
+    const prepared = await prepareFile(f);
+    if (typeof prepared === "string") setError(prepared);
+    else setFile(prepared);
+  }
+
   async function send(text: string) {
     const t = text.trim();
-    if (!t || sending) return;
+    const attachment = file;
+    if ((!t && !attachment) || sending) return;
     setSending(true);
     setError("");
     setInput("");
-    const optimistic: ChatMessage = { id: `local-${Date.now()}`, conversationId: "", from: "visitor", text: t, createdAt: "" };
+    setFile(null);
+    const optimistic: ChatMessage = { id: `local-${Date.now()}`, conversationId: "", from: "visitor", text: attachment ? `${t ? `${t}\n` : ""}📎 ${attachment.name}` : t, createdAt: "" };
     setMessages((m) => [...m, optimistic]);
     try {
       const d = await withSession(async (s) => {
-        const r = await fetch(`/api/chat/${s.id}/messages`, { method: "POST", headers: headers(s), body: JSON.stringify({ text: t }) });
+        let r: Response;
+        if (attachment) {
+          const form = new FormData();
+          form.append("file", attachment);
+          if (t) form.append("text", t);
+          r = await fetch(`/api/chat/${s.id}/files`, { method: "POST", headers: { "x-chat-token": s.token }, body: form });
+        } else {
+          r = await fetch(`/api/chat/${s.id}/messages`, { method: "POST", headers: headers(s), body: JSON.stringify({ text: t }) });
+        }
         if (r.status === 404) throw new Gone();
         const body = (await r.json().catch(() => ({}))) as { messages?: ChatMessage[]; status?: ConversationStatus; needsContact?: boolean; message?: string };
         if (!r.ok || !body.messages) throw new Error(body.message || "Message not sent. Please try again.");
@@ -226,6 +246,7 @@ export function ChatWidget() {
     } catch (e) {
       setMessages((m) => m.filter((x) => x.id !== optimistic.id));
       setInput(t);
+      setFile(attachment);
       setError((e as Error).message);
     } finally {
       setSending(false);
@@ -302,7 +323,7 @@ export function ChatWidget() {
 
           <div ref={listRef} className="flex-1 space-y-3 overflow-y-auto bg-mist px-4 py-5" aria-live="polite" aria-relevant="additions">
             {messages.map((m) => (
-              <Bubble key={m.id} m={m} onNavigate={() => setOpen(false)} />
+              <Bubble key={m.id} m={m} session={session} onNavigate={() => setOpen(false)} />
             ))}
 
             {needsContact && (
@@ -395,7 +416,36 @@ export function ChatWidget() {
                 {error}
               </p>
             )}
+            {file && (
+              <div className="mb-2 flex items-center gap-2 rounded-xl border border-ink-900/10 bg-mist px-3 py-2 text-sm">
+                <Paperclip className="h-4 w-4 shrink-0 text-volt-600" aria-hidden="true" />
+                <span className="min-w-0 flex-1 truncate text-ink-800">{file.name}</span>
+                <span className="shrink-0 text-xs text-ink-500">{formatBytes(file.size)}</span>
+                <button type="button" onClick={() => setFile(null)} className="rounded-full p-1 text-ink-500 hover:bg-white hover:text-ink-900" aria-label={`Remove ${file.name}`}>
+                  <X className="h-4 w-4" aria-hidden="true" />
+                </button>
+              </div>
+            )}
             <div className="flex items-end gap-2">
+              <input
+                ref={fileInputRef}
+                id="chat-file"
+                type="file"
+                accept={ATTACHMENT_ACCEPT}
+                className="sr-only"
+                tabIndex={-1}
+                onChange={(e) => chooseFile(e.target.files?.[0] ?? null)}
+              />
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={sending}
+                className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-ink-500 transition hover:bg-mist hover:text-volt-600 disabled:opacity-40"
+                aria-label="Attach an image or document"
+                title="Attach an image or document (max 4 MB)"
+              >
+                <Paperclip className="h-5 w-5" aria-hidden="true" />
+              </button>
               <label htmlFor="chat-input" className="sr-only">
                 Type your message
               </label>
@@ -412,12 +462,12 @@ export function ChatWidget() {
                     send(input);
                   }
                 }}
-                placeholder="Type your message…"
+                placeholder={file ? "Add a message (optional)…" : "Type your message…"}
                 className="max-h-32 min-h-[44px] flex-1 resize-none rounded-2xl border border-ink-900/15 px-4 py-2.5 text-[15px] focus:border-volt-500 focus:outline-none focus:ring-4 focus:ring-volt-500/15"
               />
               <button
                 type="submit"
-                disabled={!input.trim() || sending}
+                disabled={(!input.trim() && !file) || sending}
                 className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-volt-500 text-white transition hover:bg-volt-600 disabled:opacity-40"
                 aria-label="Send message"
               >
@@ -457,7 +507,7 @@ export function ChatWidget() {
   );
 }
 
-function Bubble({ m, onNavigate }: { m: ChatMessage; onNavigate: () => void }) {
+function Bubble({ m, session, onNavigate }: { m: ChatMessage; session: Session | null; onNavigate: () => void }) {
   if (m.from === "system") {
     return <p className="mx-auto max-w-[90%] rounded-xl bg-ink-900/[0.05] px-3 py-2 text-center text-xs leading-relaxed text-ink-600">{m.text}</p>;
   }
@@ -471,6 +521,16 @@ function Bubble({ m, onNavigate }: { m: ChatMessage; onNavigate: () => void }) {
           mine ? "rounded-br-md bg-volt-500 text-white" : m.from === "agent" ? "rounded-bl-md border border-volt-500/25 bg-white text-ink-900" : "rounded-bl-md bg-white text-ink-800 shadow-sm",
         )}
       >
+        {m.attachment && session && (
+          <span className={cn("block", m.text && "mb-2")}>
+            <AttachmentView
+              attachment={m.attachment}
+              url={`/api/chat/${session.id}/files/${m.attachment.id}`}
+              headers={{ "x-chat-token": session.token }}
+              tone={mine ? "dark" : "light"}
+            />
+          </span>
+        )}
         {m.text}
         {m.links && m.links.length > 0 && (
           <span className="mt-2 flex flex-wrap gap-2">
@@ -482,7 +542,6 @@ function Bubble({ m, onNavigate }: { m: ChatMessage; onNavigate: () => void }) {
           </span>
         )}
       </div>
-      {m.createdAt && <p className="mt-1 px-1 text-[10px] text-ink-400">{time(m.createdAt)}</p>}
     </div>
   );
 }
